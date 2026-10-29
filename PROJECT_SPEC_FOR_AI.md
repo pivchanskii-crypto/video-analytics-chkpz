@@ -1,10 +1,10 @@
 # PROJECT_SPEC_FOR_AI
 
-Снимок бэкенда Video Surveillance Platform по публичному репозиторию [weeqle/deepseek_dev](https://github.com/weeqle/deepseek_dev), ветка `main`, коммит `bf59736` (29 октября 2026, 08:51 YEKT, сообщение «Add files via upload»).
+Снимок Video Surveillance Platform по публичному репозиторию [weeqle/deepseek_dev](https://github.com/weeqle/deepseek_dev), ветка `main`, коммит `50081b3` (29 октября 2026, 08:54 YEKT, сообщение «Add files via upload»). Предыдущий снимок бэкенда был на `bf59736`; этот коммит добавляет экран оператора и `docker-compose.yml`.
 
 Это описание того, что реально лежит в коде на фазе 5. Требования ТЗ, которых в коде нет, вынесены в раздел 8 и не смешаны с контрактом.
 
-Стек: FastAPI, SQLAlchemy 2 (синхронный движок), Alembic, PostgreSQL (JSONB), Redis (список `violations_queue`), SMTP. CV-воркер в репозитории — заготовка: конфигурация, enum и скомпилированная схема события. Чтение RTSP, детекция и публикация в очередь не реализованы.
+Стек: FastAPI, SQLAlchemy 2 (синхронный движок), Alembic, PostgreSQL 16, Redis 7 (список `violations_queue`), SMTP, React 18 + Vite 6 + Tailwind 4. CV-воркер в репозитории — заготовка: конфигурация, enum и скомпилированная схема события. Чтение RTSP, детекция и публикация в очередь не реализованы. Фронтенд — только вход и лента нарушений, без панели администратора.
 
 ---
 
@@ -12,6 +12,23 @@
 
 ```text
 deepseek_dev/
+├── docker-compose.yml
+├── Dockerfile                 # образ фронтенда (node → nginx)
+├── nginx.conf
+├── package.json
+├── package-lock.json
+├── index.html
+├── vite.config.ts
+├── tsconfig.json
+├── dist/                      # уже собранная статика, закоммичена
+├── src/                       # исходники SPA лежат в корне, не в frontend/
+│   ├── main.tsx
+│   ├── App.tsx
+│   ├── index.css
+│   ├── lib/{api,auth,types}.ts
+│   ├── hooks/useViolationStream.ts
+│   ├── pages/{LoginPage,OperatorPage}.tsx
+│   └── components/{ProtectedRoute,ViolationCard,icons}.tsx
 ├── backend/
 │   ├── Dockerfile
 │   ├── entrypoint.sh
@@ -72,7 +89,7 @@ deepseek_dev/
         └── __pycache__/schemas.cpython-313.pyc   # исходника schemas.py нет
 ```
 
-В git также закоммичены каталоги `__pycache__` (CPython 3.13). Файла `.env.example` нет, хотя README просит `cp .env.example .env`. Фронтенда, `docker-compose`, таблицы `workers` и исходника `worker/core/schemas.py` нет.
+В git также закоммичены каталоги `__pycache__` (CPython 3.13). Файла `.env.example` нет, хотя README бэкенда и комментарий compose просят `cp .env.example .env`. Таблицы `workers` и исходника `worker/core/schemas.py` нет. Каталога `frontend/` нет: SPA и её Dockerfile лежат в корне, а `docker-compose.yml` собирает сервис `frontend` из `context: ./frontend`. Каталог `worker/` по-прежнему без своего `Dockerfile`, хотя compose собирает `worker-1` и `worker-2` из `context: ./worker`.
 
 | Модуль | Назначение |
 | --- | --- |
@@ -91,6 +108,9 @@ deepseek_dev/
 | `app/services/access_service.py` | Админ видит все камеры, оператор — строки `operator_camera` |
 | `app/seed.py` | Идемпотентный сид камер и админа при старте контейнера |
 | `worker/core` | Настройки воркера и enum классов детекции. Цикла анализа нет |
+| `docker-compose.yml` | PostgreSQL 16, Redis 7, backend, два воркера, frontend |
+| `src/` | Экран оператора: логин, лента, WebSocket, кнопки решения |
+| `Dockerfile` + `nginx.conf` | Сборка Vite и раздача SPA с прокси `/api/` на `backend:8000` |
 
 ---
 
@@ -718,6 +738,8 @@ SMTP: при `SMTP_USE_SSL` — `SMTP_SSL`, иначе `SMTP` и при `SMTP_US
 
 `stream_redis_violations` рассылал бы сырой JSON очереди тем же фильтром, но сейчас не запущен.
 
+Клиент (`src/hooks/useViolationStream.ts`) открывает `ws` или `wss` на том же хосте: `/api/v1/ws/violations?token=<access>`. Сообщение с `type === "violation"` добавляется в начало ленты, повтор того же `id` отбрасывается. Закрытие с кодом `1008` сбрасывает сессию. Любое другое закрытие переподключает сокет через 3 секунды. В dev Vite проксирует `/api` на `http://localhost:8000` с `ws: true`. В nginx то же самое идёт на `http://backend:8000`, таймауты прокси 3600 с, заголовки `Upgrade` и `Connection: upgrade`.
+
 ---
 
 ## 8. Ограничения и заделы
@@ -732,7 +754,9 @@ SMTP: при `SMTP_USE_SSL` — `SMTP_SSL`, иначе `SMTP` и при `SMTP_US
 - `config.yaml` бэкенда содержит пустые `ppe_classes` и `cameras`.
 - `AuditLog` готов и нигде не заполняется.
 - `stream_redis_violations` — второй потребитель той же очереди, не подключённый к lifespan.
-- README описывает фазу 5 как текущий этап и ссылается на отсутствующий `.env.example`.
+- README описывает фазу 5 как текущий этап и ссылается на отсутствующий `.env.example`. Комментарий `docker-compose.yml` ссылается на тот же отсутствующий файл в корне.
+- `docker-compose.yml` описывает два CV-воркера и фронтенд, но контексты сборки не совпадают с деревом: `./frontend` и `worker/Dockerfile` в коммите нет.
+- Фронтенд сохраняет refresh-токен и нигде его не отправляет на `/auth/refresh`.
 
 Чего в коде нет, хотя модели или ТЗ это подразумевают:
 
@@ -746,4 +770,102 @@ SMTP: при `SMTP_USE_SSL` — `SMTP_SSL`, иначе `SMTP` и при `SMTP_US
 - rate limit, security-заголовки, TLS (его нет внутри приложения);
 - тесты API.
 
-Видео сейчас: API хранит и отдаёт строку `frame_path`. Показать картинку или поток этот сервис не умеет. Сид может создать камеру с `synthetic://camera-{id}` и `status=online`, чтобы обработчик не отклонял события несуществующей камеры. Такой URL через `POST /cameras` не пройдёт.
+Видео сейчас: API хранит и отдаёт строку `frame_path`. Потока (HLS, MJPEG, WebRTC) нет. Карточка на экране оператора рисует `<img>` только если `frame_path` начинается с `http://` или `https://`. Локальный путь, `synthetic://` и пустое значение показывают заглушку «Фото недоступно» и пунктирную рамку. Сид может создать камеру с `synthetic://camera-{id}` и `status=online`, чтобы обработчик не отклонял события несуществующей камеры. Такой URL через `POST /cameras` не пройдёт.
+
+---
+
+## 9. Frontend
+
+Исходники лежат в корне репозитория, не в каталоге `frontend/`. Это экран оператора, не админка: камеры, зоны, пользователи и лица в UI не редактируются.
+
+Сборка: React 18.3, React Router 6.28, Vite 6, TypeScript ~5.6, Tailwind CSS 4 (`@tailwindcss/vite`). Скрипты: `dev`, `build` (`tsc && vite build`), `preview`. Dev-сервер слушает порт 3000 на всех интерфейсах.
+
+Маршруты (`src/App.tsx`):
+
+| Путь | Экран |
+| --- | --- |
+| `/login` | форма логина |
+| `/` | лента, только если в `localStorage` есть `access_token` |
+| `*` | редирект на `/` |
+
+Защита — наличие строки токена, не проверка `exp`. Событие `auth:unauthorized` (его шлёт `api.ts` на HTTP 401) уводит на `/login`.
+
+Токены: `localStorage.access_token` и `localStorage.refresh_token`. Refresh сохраняется при логине и больше не читается.
+
+HTTP-клиент (`src/lib/api.ts`) ходит относительными путями, заголовок `Authorization: Bearer`. Вызовы, которые UI реально делает:
+
+| Функция | Запрос |
+| --- | --- |
+| `login` | `POST /api/v1/auth/login` без Bearer, тело `{login, password}` |
+| `listViolations` | `GET /api/v1/violations?limit=200` |
+| `sendFeedback` | `POST /api/v1/violations/{id}/feedback`, тело `{decision}` |
+
+Фильтры ленты, пагинация и `include_admitted` с клиента не передаются. Берутся первые 200 записей в порядке бэкенда.
+
+`ViolationCard` подписи:
+
+| `type` | Подпись |
+| --- | --- |
+| `no_pre` | Без СИЗ |
+| `zone_entry` | Вход в зону |
+| `unauthorized` | Несанкционированный доступ |
+
+| `status` | Подпись |
+| --- | --- |
+| `open` | Новое |
+| `confirmed` | Подтверждено |
+| `false_alarm` | Ложная тревога |
+
+Кнопки «Подтвердить» и «Ложная тревога» активны только при `open`. После ответа API карточка берёт `updated.status`. Заголовок карточки: `camera_name`, иначе `Камера #{camera_id}`. Зона показывается, только если бэкенд прислал `zone_name`. Сокетное сообщение из раздела 7 этих имён не содержит, поэтому живое событие подписывается номером камеры, пока страницу не перезагрузят. Время форматируется `ru-RU` в часовом поясе браузера. Сетка: 1 колонка, с `sm` — 2, с `lg` — 3, с `xl` — 4.
+
+Образ фронтенда (`Dockerfile` в корне): стадия `node:20-alpine` выполняет `npm install` и `npm run build`, стадия `nginx:1.27-alpine` копирует `dist` и `nginx.conf`. `nginx` слушает 80, неизвестный путь отдаёт `index.html`, `/api/` проксируется на `http://backend:8000`.
+
+В репозиторий также закоммичен готовый `dist/` (`index.html` и хэшированные `assets`). Образ его не использует: он пересобирает статику.
+
+---
+
+## 10. Docker Compose
+
+Файл `docker-compose.yml`, проект `video-surveillance`. Сеть `surveillance` (bridge). Тома `postgres_data`, `redis_data`.
+
+| Сервис | Образ / сборка | Порт на хосте | Заметки |
+| --- | --- | --- | --- |
+| `db` | `postgres:16-alpine` | `${POSTGRES_PORT:-5433}:5432` | healthcheck `pg_isready` |
+| `redis` | `redis:7-alpine`, `appendonly yes` | `${REDIS_PORT:-6379}:6379` | healthcheck `redis-cli ping` |
+| `backend` | `build: ./backend` | `${BACKEND_PORT:-8000}:8000` | ждёт healthy db и redis |
+| `worker-1` | `build: ./worker` | нет | `CAMERA_ID=1`, `RTSP_URL` из `.env` |
+| `worker-2` | `build: ./worker` | нет | `CAMERA_ID=2` |
+| `frontend` | `build: ./frontend` | `${FRONTEND_PORT:-3000}:80` | ждёт backend без healthcheck |
+
+Внутри сети backend получает:
+
+```text
+DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-surveillance}
+REDIS_URL=redis://redis:6379/0
+VIOLATIONS_QUEUE=${VIOLATIONS_QUEUE:-violations_queue}
+```
+
+Хостовый порт Postgres 5433 не используется контейнером backend: тот ходит на `db:5432`. Оба воркера и backend читают корневой `.env` через `env_file`. Без этого файла `docker compose up` не стартует, даже если переменные заданы в секции `environment`.
+
+Переменные, которые compose подставляет сам, если их нет в окружении запуска:
+
+| Имя | Default |
+| --- | --- |
+| `POSTGRES_DB` | `surveillance` |
+| `POSTGRES_USER` | `postgres` |
+| `POSTGRES_PASSWORD` | `postgres` |
+| `POSTGRES_PORT` | `5433` |
+| `REDIS_PORT` | `6379` |
+| `BACKEND_PORT` | `8000` |
+| `FRONTEND_PORT` | `3000` |
+| `VIOLATIONS_QUEUE` | `violations_queue` |
+| `RTSP_URL` | пусто |
+
+JWT, SMTP и `SEED_*` compose не задаёт. Они попадут в backend только если лежат в корневом `.env` (backend `entrypoint` читает окружение процесса, а `Settings` ещё и файл `backend/.env`, которого в образе нет).
+
+Сборка в текущем дереве не сходится с compose:
+
+- сервис `frontend` ищет `./frontend/Dockerfile`, а Dockerfile, `package.json`, `src/` и `nginx.conf` лежат в корне;
+- сервисы `worker-1` и `worker-2` ищут `./worker/Dockerfile`, в `worker/` есть только `core/`.
+
+Сервис `backend` собирается из существующего `backend/Dockerfile`.
