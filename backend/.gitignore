@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Секреты/локальные настройки
+.env
+
+# Alembic/миграции — ревизии коммитим, а лог — нет
+alembic/versions/__pycache__/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

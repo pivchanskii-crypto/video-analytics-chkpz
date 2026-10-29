@@ -1,0 +1,137 @@
+# Video Surveillance Platform — единый запуск всех сервисов.
+#
+# Стек:
+#   db       — PostgreSQL 16 (конфигурация, тома, healthcheck)
+#   redis    — Redis 7 (брокер очередей violations_queue)
+#   backend  — FastAPI (миграции Alembic + сидинг + uvicorn)
+#   worker-1 — CV-воркер №1 (camera_id=1)
+#   worker-2 — CV-воркер №2 (camera_id=2)
+#   frontend — React SPA (Nginx, порт 3000)
+#
+# Все секреты/URL читаются из корневого .env (см. .env.example).
+# Запуск:  cp .env.example .env && docker compose up --build
+
+name: video-surveillance
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: vs-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-surveillance}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-surveillance}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - surveillance
+
+  redis:
+    image: redis:7-alpine
+    container_name: vs-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - surveillance
+
+  backend:
+    build:
+      context: ./backend
+    container_name: vs-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Внутри контейнера БД и Redis доступны по DNS-именам сети "surveillance".
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-surveillance}
+      REDIS_URL: redis://redis:6379/0
+      VIOLATIONS_QUEUE: ${VIOLATIONS_QUEUE:-violations_queue}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - frames_data:/app/frames
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - surveillance
+
+  worker-1:
+    build:
+      context: ./worker
+    container_name: vs-worker-1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      VIOLATIONS_QUEUE: ${VIOLATIONS_QUEUE:-violations_queue}
+      CAMERA_ID: "1"
+      RTSP_URL: ${RTSP_URL:-}
+    volumes:
+      - frames_data:/app/frames
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - surveillance
+
+  worker-2:
+    build:
+      context: ./worker
+    container_name: vs-worker-2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      VIOLATIONS_QUEUE: ${VIOLATIONS_QUEUE:-violations_queue}
+      CAMERA_ID: "2"
+      RTSP_URL: ${RTSP_URL:-}
+    volumes:
+      - frames_data:/app/frames
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - surveillance
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: vs-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
+    networks:
+      - surveillance
+
+networks:
+  surveillance:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  frames_data:

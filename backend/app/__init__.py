@@ -1,0 +1,1 @@
+"""Пакет приложения Video Surveillance Platform."""
